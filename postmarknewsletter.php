@@ -143,7 +143,10 @@ class PostmarkNewsletter extends Module
             $output .= $this->sendTestNewsletter();
         }
 
-        $this->context->smarty->assign('module_dir', $this->_path);
+        $this->context->smarty->assign(array(
+            'module_dir' => $this->_path,
+            'stats' => $this->getDashboardStats(),
+        ));
         $this->context->controller->addCSS($this->_path . 'views/css/admin.css');
         $this->context->controller->addJS($this->_path . 'views/js/admin.js');
 
@@ -389,6 +392,55 @@ class PostmarkNewsletter extends Module
     }
 
     /**
+     * Send a test newsletter email using the configured Postmark settings
+     */
+    protected function sendTestNewsletter()
+    {
+        $testEmail = Tools::getValue('test_email');
+
+        if (empty($testEmail) || !Validate::isEmail($testEmail)) {
+            return $this->displayError($this->l('Please provide a valid test email address.'));
+        }
+
+        $apiToken = Configuration::get('POSTMARK_API_TOKEN');
+        $fromEmail = Configuration::get('POSTMARK_FROM_EMAIL');
+        $fromName = Configuration::get('POSTMARK_FROM_NAME');
+        $messageStream = Configuration::get('POSTMARK_MESSAGE_STREAM', 'broadcast');
+
+        if (empty($apiToken) || empty($fromEmail) || empty($fromName)) {
+            return $this->displayError($this->l('Please configure the Postmark API token, From email, and From name before sending a test email.'));
+        }
+
+        try {
+            $client = new PostmarkClient($apiToken);
+
+            $subject = $this->l('Postmark Newsletter Test Email');
+            $htmlBody = '<p>' . $this->l('Hello!') . '</p>'
+                . '<p>' . $this->l('This is a test email sent from the Postmark Newsletter module configuration page.') . '</p>'
+                . '<p>' . $this->l('If you received this message, your Postmark settings are working correctly.') . '</p>';
+
+            $payload = array(
+                'From' => sprintf('%s <%s>', $fromName, $fromEmail),
+                'To' => $testEmail,
+                'Subject' => $subject,
+                'HtmlBody' => $htmlBody,
+                'MessageStream' => $messageStream,
+                'TrackOpens' => (bool)Configuration::get('POSTMARK_TRACK_OPENS', 1),
+            );
+
+            if ((bool)Configuration::get('POSTMARK_TRACK_LINKS', 1)) {
+                $payload['TrackLinks'] = 'HtmlAndText';
+            }
+
+            $client->sendEmail($payload);
+
+            return $this->displayConfirmation($this->l('Test email sent successfully. Please check the inbox of the provided address.'));
+        } catch (Exception $e) {
+            return $this->displayError($this->l('Failed to send test email: ') . $e->getMessage());
+        }
+    }
+
+    /**
      * Add CSS for back office header
      */
     public function hookDisplayBackOfficeHeader()
@@ -397,6 +449,41 @@ class PostmarkNewsletter extends Module
             $this->context->controller->addCSS($this->_path . 'views/css/admin.css');
             $this->context->controller->addJS($this->_path . 'views/js/admin.js');
         }
+    }
+
+    /**
+     * Collect statistics for the configuration dashboard
+     *
+     * @return array
+     */
+    protected function getDashboardStats()
+    {
+        $stats = array(
+            'total_subscribers' => (int)$this->getTotalSubscribers(),
+            'total_sent' => 0,
+            'total_bounces' => 0,
+            'auto_unsubscribed' => 0,
+        );
+
+        $logStats = Db::getInstance()->getRow('
+            SELECT
+                SUM(CASE WHEN status IN ("sent", "delivered") THEN 1 ELSE 0 END) AS sent_count,
+                SUM(CASE WHEN status = "bounced" THEN 1 ELSE 0 END) AS bounce_count
+            FROM ' . _DB_PREFIX_ . 'postmark_newsletter_log
+        ');
+
+        if ($logStats) {
+            $stats['total_sent'] = (int)$logStats['sent_count'];
+            $stats['total_bounces'] = (int)$logStats['bounce_count'];
+        }
+
+        $bounceStats = BounceHandler::getBounceStats();
+
+        if ($bounceStats) {
+            $stats['auto_unsubscribed'] = (int)$bounceStats['auto_unsubscribed'];
+        }
+
+        return $stats;
     }
 
     /**
