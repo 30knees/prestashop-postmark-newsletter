@@ -26,7 +26,7 @@
     }
   },
   "compatibility": {
-    "prestashop": "~8.0.0"
+    "prestashop": "^8.0"
   },
   "category": "emailing",
   "tags": [
